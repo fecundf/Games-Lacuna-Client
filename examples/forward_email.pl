@@ -19,7 +19,8 @@
 #
 # You can provide 'archive' and 'trash' lists - these are matched against all
 # mails (whether read or not) as a case-insensitive regex, and the email is
-# archived or trashed if the subject line matches.
+# archived or trashed if the subject line matches. You can also provide an
+# 'ignore' list which will skip processing for matches.
 # Matching emails are never forwarded to your email.
 #
 # This only forwards the short 'body_preview' from the inbox listing
@@ -48,6 +49,9 @@
 #
 #trash:
 #    - '^Glyph Discovered!$'
+#
+#ignore:
+#    - 'Excavator'
 
 use strict;
 use warnings;
@@ -116,8 +120,11 @@ die "mime_lite key in forward_email config file must be a list"
     if ref($mime_lite_conf) ne 'ARRAY';
 
 my $max_pages     = $email_conf->{max_pages} || 0;
-my $archive_match = $email_conf->{archive}   || [];
-my $trash_match   = $email_conf->{trash}     || [];
+my %match_rxs;
+for my $match_type (qw(archive trash ignore)) {
+  $match_rxs{$match_type} = $email_conf->{$match_type} || [];
+}
+
 
 # Last seen message
 my $cache_file_path = File::Spec->catfile(
@@ -181,7 +188,12 @@ for my $message ( reverse @messages ) {
         $last_seen_id = $message->{id};
     }
 
-    for my $regex ( @$archive_match ) {
+    my %msg_destination =
+      ( archive => \@archive_id,
+	trash   => \@trash_id );
+			   
+    for my $match_type (qw(archive trash ignore)) {
+      for my $regex ( @{$match_rxs{$match_type}} ) {
         if ( $message->{subject}  =~ m/$regex/i ) {
             debug(
                 sprintf "Message '%s' matched archive regex '%s'",
@@ -189,22 +201,11 @@ for my $message ( reverse @messages ) {
                     $regex,
             );
 
-            push @archive_id, $message->{id};
+            push @{$msg_destination{$match_type}}, $message->{id}
+		     if $msg_destination{$match_type};
             next MESSAGE;
         }
-    }
-
-    for my $regex ( @$trash_match ) {
-        if ( $message->{subject} =~ m/$regex/i ) {
-            debug(
-                sprintf "Message '%s' matched trash regex '%s'",
-                    $message->{subject},
-                    $regex,
-            );
-
-            push @trash_id, $message->{id};
-            next MESSAGE;
-        }
+      }
     }
 
     if ( $message->{has_read} ) {
