@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 #
-# Simple program for upgrading spaceports.
+# Simple program for repairing
 
 use strict;
 use warnings;
@@ -12,13 +12,14 @@ use JSON;
 use Exception::Class;
 
   my %opts = (
-        h => 0,
-        v => 0,
-        maxlevel => 29,  # I know 30 is max, but for planets with a lot of spaceports, too much energy
-        config => "lacuna.yml",
-        dumpfile => "log/space_builds.js",
-        station => 0,
-        wait    => 14 * 60 * 60,
+        h         => 0,
+        v         => 0,
+        city      => 0,  #by default we don't repair cities because they take huge amounts of resources
+        platforms => 0,  #by default we don't repair platforms
+        config    => "lacuna.yml",
+        dumpfile  => "log/repairs.js",
+        station   => 0, # Don't repair station modules by default
+        sleep     => 1, # Sleep 1 second between calls by default
   );
 
   GetOptions(\%opts,
@@ -27,22 +28,25 @@ use Exception::Class;
     'planet=s@',
     'config=s',
     'dumpfile=s',
-    'maxlevel=i',
-    'number=i',
-    'wait=i',
+    'ordered',
+    'city',
+    'platforms',
+    'sleep',
+    'station',
   );
 
   usage() if $opts{h};
   
   my $glc = Games::Lacuna::Client->new(
     cfg_file => $opts{config} || "lacuna.yml",
+    rpc_sleep => $opts{sleep},
     # debug    => 1,
   );
 
   my $json = JSON->new->utf8(1);
   $json = $json->pretty([1]);
   $json = $json->canonical([1]);
-  open(OUTPUT, ">", $opts{dumpfile}) || die "Could not open $opts{dumpfile} for writing.";
+  open(OUTPUT, ">", $opts{dumpfile}) || die "Could not write to $opts{dumpfile}, you probably need to make a log directory.\n";
 
   my $status;
   my $empire = $glc->empire->get_status->{empire};
@@ -51,7 +55,6 @@ use Exception::Class;
 # Get planets
   my %planets = map { $empire->{planets}{$_}, $_ } keys %{$empire->{planets}};
   $status->{planets} = \%planets;
-  my $short_time = $opts{wait} + 1;
 
   my $keep_going = 1;
   do {
@@ -67,46 +70,32 @@ use Exception::Class;
       my $result    = $planet->get_buildings;
       my $buildings = $result->{buildings};
       my $station = $result->{status}{body}{type} eq 'space station' ? 1 : 0;
-      if ($station) {
+      if ($station and !$opts{station}) {
         push @skip_planets, $pname;
         next;
       }
       my ($sarr) = bstats($buildings, $station);
-      my $seconds = $opts{wait} + 1;
+      my @bids = map { $_->{id} } @$sarr;
+      my $return = $planet->repair_list(\@bids);
       for my $bld (@$sarr) {
-        printf "%7d %10s l:%2d x:%2d y:%2d\n",
-                 $bld->{id}, $bld->{name},
-                 $bld->{level}, $bld->{x}, $bld->{y};
-        my $ok;
-        my $bldstat = "Bad";
-        $ok = eval {
-          my $type = get_type_from_url($bld->{url});
-          my $bldpnt = $glc->building( id => $bld->{id}, type => $type);
-          $bldstat = $bldpnt->upgrade();
-          $seconds = $bldstat->{building}->{pending_build}->{seconds_remaining} - 15;
-        };
-        unless ($ok) {
-          print "$@ Error; sleeping 60\n";
-          sleep 60;
+        my $cur = $return->{buildings}->{$bld->{id}}->{efficiency};
+        my $old = $bld->{efficiency};
+        $return->{buildings}->{$bld->{id}}->{efficiency_old} = $old;
+        if ($old != $cur) {
+          printf "%25s %2d/%2d repaired %3d percent to %3d percent.\n", $bld->{name}, $bld->{x}, $bld->{y}, $cur - $old, $cur;
         }
       }
-      $status->{"$pname"} = $sarr;
-      if ($seconds > $opts{wait}) {
-        print "Queue of ", sec2str($seconds),
-              " is longer than wait period of ",sec2str($opts{wait}), ", taking $pname off of list.\n";
-        push @skip_planets, $pname;
-      }
-      elsif ($seconds < $short_time) {
-        $short_time = $seconds;
-      }
+      $status->{"$pname"} = $return->{buildings};
+      print "Done with $pname\n";
+      push @skip_planets, $pname;
     }
     print "Done with: ",join(":", sort @skip_planets), "\n";
     for $pname (@skip_planets) {
       delete $planets{$pname};
     }
     if (keys %planets) {
-      print "Clearing Queue for ",sec2str($short_time),".\n";
-      sleep $short_time;
+      print "Clearing Queue shouldn't be needed.\n";
+      sleep 1;
     }
     else {
       print "Nothing Else to do.\n";
@@ -124,33 +113,32 @@ sub bstats {
   my ($bhash, $station) = @_;
 
   my $bcnt = 0;
-  my $dlevel = $station ? 121 : 0;
   my @sarr;
   for my $bid (keys %$bhash) {
-    if ($bhash->{$bid}->{name} eq "Development Ministry") {
-      $dlevel = $bhash->{$bid}->{level};
-    }
-    if ( defined($bhash->{$bid}->{pending_build})) {
-      $bcnt++;
-    }
-#    elsif ($bhash->{$bid}->{name} eq "Waste Sequestration Well") {
-    elsif ($bhash->{$bid}->{name} eq "Space Port") {
-#    elsif ($bhash->{$bid}->{name} eq "Shield Against Weapons") {
-      my $ref = $bhash->{$bid};
-      $ref->{id} = $bid;
-      push @sarr, $ref if ($ref->{level} < $opts{maxlevel} && $ref->{efficiency} == 100);
+    next if (($bhash->{$bid}->{name} =~ /Lost City/) && (!$opts{city}));
+    next if (($bhash->{$bid}->{name} =~ /Platform/) && (!$opts{platforms}));
+    my $ref = $bhash->{$bid};
+    $ref->{id} = $bid;
+    if ($ref->{repair_costs}) {
+      push @sarr, $ref if ($ref->{efficiency} < 100);
     }
   }
-  @sarr = sort { $a->{level} <=> $b->{level} ||
+  if ($opts{ordered}) {
+    @sarr = sort { repair_cost($a->{repair_costs}) <=> repair_cost($b->{repair_costs}) ||
+                 $b->{efficiency} <=> $a->{efficiency} ||
                  $a->{x} <=> $b->{x} ||
                  $a->{y} <=> $b->{y} } @sarr;
-  if (scalar @sarr > ($dlevel + 1 - $bcnt)) {
-    splice @sarr, ($dlevel + 1 - $bcnt);
-  }
-  if (scalar @sarr > ($opts{number})) {
-    splice @sarr, ($opts{number} + 1 - $bcnt);
   }
   return (\@sarr);
+}
+
+sub repair_cost {
+  my ($rhash) = @_;
+
+#  print $json->pretty->canonical->encode($rhash);
+# die;
+
+  return ($rhash->{food} + $rhash->{water} + $rhash->{ore} + $rhash->{energy} );
 }
 
 sub sec2str {
@@ -193,8 +181,11 @@ Options:
   --config <file>    - Specify a GLC config file, normally lacuna.yml.
   --planet <name>    - Specify planet
   --dumpfile         - data dump for all the info we don't print
-  --maxlevel         - do not upgrade if this level has been achieved.
-  --number           - only upgrade at most this number of buildings
+  --ordered          - figure cheapest to most expensive.  Costs more RPC.
+  --city             - Repair Lost City Pieces
+  --platforms        - Repair Terra and Gas Platforms
+  --station          - Repair Station Modules
+  --sleep            - Sleep interval between api calls.
 END
   exit 1;
 }
