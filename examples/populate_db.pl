@@ -65,10 +65,11 @@ my $csv = Text::CSV_XS->new( { binary => 1 } )
 open my $fh, "<:encoding(utf8)", $opts{csv} or die "$opts{csv}: $!";
 $clear_stars_table->execute();
 $clear_orbitals_table->execute();
+$csv->getline($fh);
 while ( my $row = $csv->getline($fh) ) {
 
     my ( $id, $name, $x, $y, $color, $zone ) = @$row;
-    warn "Inserting star $name at $x, $y\n";
+    #warn "Inserting star $name at $x, $y\n";
     $insert_star->execute( $id, $name, $x, $y, $color, $zone, $when )
         or die "Can't insert star: " . $insert_star->errstr;
 
