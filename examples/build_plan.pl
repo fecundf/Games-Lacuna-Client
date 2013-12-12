@@ -153,8 +153,13 @@ for (my $i = 0; $i <= $#queue; $i++) {
     sleep( $wait+$build_gap );
 }
 
+my $first;
 sub build_remaining {
     $buildings = $planet->get_buildings->{buildings};
+
+    print "Building names: ",
+      join(" ",sort map "$_->{url}(L$_->{level}\@$_->{x},$_->{y})",values %$buildings),"\n"
+	 if !$first++;
 
     return
         max
