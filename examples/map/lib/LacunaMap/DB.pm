@@ -39,7 +39,27 @@ HERE
           type TEXT,
           size INT,
           water INT,
-          empire_id INT
+          empire_id INT,
+	  anthracite INT,
+	  bauxite INT,
+	  beryl INT,
+	  chalcopyrite INT,
+	  chromite INT,
+	  fluorite INT,
+	  galena INT,
+	  goethite INT,
+	  gold INT,
+	  gypsum INT,
+          halite INT,
+	  kerogen INT,
+	  magnetite INT,
+	  methane INT,
+	  monazite INT,
+	  rutile INT,
+	  sulfur INT,
+	  trona INT,
+	  uraninite INT,
+	  zircon INT
         );
 HERE
       $dbh->do(<<'HERE');

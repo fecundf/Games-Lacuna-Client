@@ -174,6 +174,8 @@ sub _run_one_scan {
             ($body->{empire} ? (empire_id => $body->{empire}{id}) : ()),
             map {($_ => $body->{$_})} qw(
               id name x y star_id orbit type size water
+	      anthracite bauxite beryl chalcopyrite chromite fluorite galena goethite gold gypsum
+	      halite kerogen magnetite methane monazite rutile sulfur trona uraninite zircon
             )
           );
         };

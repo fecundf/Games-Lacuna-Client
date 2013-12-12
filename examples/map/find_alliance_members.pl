@@ -17,7 +17,7 @@ my $client = Games::Lacuna::Client->new(
   #debug => 1,
 );
 
-my $rv = $client->alliance->find('The Understanding');
+my $rv = $client->alliance->find('UNSC');
 my $alliance = $rv->{alliances}[0];
 die if not defined $alliance;
 
