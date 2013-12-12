@@ -6,13 +6,15 @@ use DBI;
 use FindBin;
 use Getopt::Long          qw(GetOptions);
 use JSON::Any;
+use List::Util qw(shuffle);
 use lib "$FindBin::Bin/../lib";
 use Games::Lacuna::Client ();
+use feature 'state';
 
 my %opts = (
     dbfile         => "$FindBin::Bin/../mail.db",
-    'max-messages' => 2000,
-    'max-rpc'      => 9500,
+    'max-messages' => 1000,
+    'max-rpc'      => 4000,
 );
 
 my @tags = qw(
@@ -86,7 +88,7 @@ my $json = JSON::Any->new;
 
 my $client = Games::Lacuna::Client->new(
     cfg_file  => $cfg_file,
-    rpc_sleep => 1,
+    rpc_sleep => 1.2,
     # debug    => 1,
 );
 
@@ -111,7 +113,7 @@ if ( $opts{debug} ) {
 my $total_messages = 0;
 my $response;
 
-for my $mail_id (@ids) {
+while (my $mail_id = shift @ids) {
     $total_messages++;
 
     get_message( $mail_id )
@@ -139,9 +141,9 @@ exit;
 
 ###
 sub filter_mail {
-    my $sql = "SELECT mail_index.id FROM mail_index LEFT JOIN mail_message "
-            . "ON mail_index.id = mail_message.id "
-            . "WHERE mail_message.id IS NULL ";
+    my $sql = "SELECT id FROM mail_index "
+            . "WHERE id not in (select mail_message.id FROM mail_message) "
+	    . "order by id desc limit $opts{'max-messages'}";
 
     if ( @tags ) {
         $sql .= " AND (";
@@ -176,11 +178,23 @@ sub filter_mail {
 }
 
 sub get_message {
+    state $max_failures=30;
     my ( $mail_id ) = @_;
 
-    $response = $inbox->read_message( $mail_id );
+    my $success = defined eval {
+      $response = $inbox->read_message( $mail_id );
+      1;
+    };
 
-    save_to_db();
+    if ($success) { save_to_db() }
+    else {
+      print "Did not find message $mail_id\n";
+      @ids = shuffle @ids if $max_failures-- == 5;
+      if (! $max_failures ) {
+	warn "Too many missed messages, exiting.\n";
+	@ids=();
+      }
+    }
 
     check_rpc_limit()
         or return;
@@ -243,12 +257,13 @@ my $server_rpc_limit;
 sub check_rpc_limit {
     # only need to check this once
     if ( !$server_rpc_limit ) {
-        $server_rpc_limit = $response->{status}{server}{rpc_limit};
+        $server_rpc_limit = $response->{status}{server}{rpc_limit} ||
+	  die "We seem to have run out of RPCs\n";
 
         if ( $server_rpc_limit < $opts{'max-rpc'} ) {
             warn <<MSG;
 Warning:
---max-rpc is set higher than the rpc-limit returned by the server,
+--max-rpc is set higher than the rpc-limit ($server_rpc_limit) returned by the server,
 this may result in you running out of calls for the day.
 
 MSG
